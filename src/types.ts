@@ -1,13 +1,15 @@
 import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import { z } from "zod";
+import { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 
-export type tool<Args extends z.ZodRawShape> = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type tool<Args extends Record<string, any> = Record<string, any>> = {
   name: string;
   description: string;
   schema: Args;
   handler: (
-    args: z.infer<z.ZodObject<Args>>,
-    extra: RequestHandlerExtra
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    args: any,
+    extra: RequestHandlerExtra<ServerRequest, ServerNotification>
   ) => {
     content: Array<{
       type: "text";

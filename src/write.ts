@@ -1,4 +1,5 @@
 import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { tool } from "./types.js";
 import { vaultPath } from "./index.js";
 import fs from "fs";
@@ -17,9 +18,9 @@ export const updateFileContent: tool<{
     filePath: z
       .string()
       .describe("The path of the file to update, relative to the vault root"),
-    content: z.string().describe("The markdown content to write to the file"),
+    content: z.string().max(1_000_000).describe("The markdown content to write to the file"),
   },
-  handler: (args, extra: RequestHandlerExtra) => {
+  handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
     if (!vaultPath) {
       return {
         content: [
@@ -34,10 +35,35 @@ export const updateFileContent: tool<{
     const { filePath, content } = args;
 
     try {
+      const resolvedVault = path.resolve(vaultPath);
+      const fullPath = path.resolve(resolvedVault, filePath);
+
+      if (!fullPath.startsWith(resolvedVault + path.sep) && fullPath !== resolvedVault) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: File path escapes the vault directory.",
+            },
+          ],
+        };
+      }
+
+      // Reject writes to symlinks — they could target files outside the vault
+      if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isSymbolicLink()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Cannot write to a symbolic link.",
+            },
+          ],
+        };
+      }
+
       const allFiles = getAllFilenames(vaultPath);
       const fileExists = allFiles.includes(filePath);
 
-      const fullPath = path.join(vaultPath, filePath);
       const dirPath = path.dirname(fullPath);
 
       if (!fs.existsSync(dirPath)) {

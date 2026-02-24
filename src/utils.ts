@@ -1,17 +1,27 @@
-import { existsSync } from "fs";
+import { existsSync, statSync, realpathSync } from "fs";
+import p from "path";
 
-export const validateVaultPath = (path: string | undefined): string => {
-  if (!path) {
+export const validateVaultPath = (vaultPath: string | undefined): string => {
+  if (!vaultPath) {
     throw new Error(
       "Vault path must be provided as a command line argument.\nUsage: <command> <vault_path>"
     );
   }
 
-  if (!existsSync(path)) {
+  const resolved = p.resolve(vaultPath);
+
+  if (!existsSync(resolved)) {
     throw new Error(
-      `Invalid vault path: "${path}"\nPlease provide a path to an existing Obsidian vault`
+      `Invalid vault path: "${vaultPath}"\nPlease provide a path to an existing Obsidian vault`
     );
   }
 
-  return path;
+  if (!statSync(resolved).isDirectory()) {
+    throw new Error(
+      `Invalid vault path: "${vaultPath}"\nPath must be a directory, not a file`
+    );
+  }
+
+  // Resolve symlinks so all downstream path comparisons use the real path
+  return realpathSync(resolved);
 };

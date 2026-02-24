@@ -1,4 +1,5 @@
 import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { tool } from "./types.js";
 import { vaultPath } from "./index.js";
 import fs from "fs";
@@ -11,7 +12,7 @@ const getAllFilenamesTool: tool<{}> = {
   description:
     "Get a list of all filenames in the Obsidian vault. Useful for retrieving their contents later. ",
   schema: {},
-  handler: (args, extra: RequestHandlerExtra) => {
+  handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
     if (!vaultPath) {
       return {
         content: [
@@ -41,18 +42,23 @@ export function getAllFilenames(
   dirPath: string,
   basePath: string = dirPath
 ): string[] {
-  // Ignore dot files/directories and get all files recursively
+  // Ignore dot files/directories, don't follow symlinks into directories
   const files = glob.sync("**/*", {
     cwd: dirPath,
     nodir: true,
     dot: false,
+    follow: false,
   });
 
-  // Get file stats and sort by modification time (most recent first)
+  // Filter out symlinks and sort by modification time (most recent first)
   return files
+    .filter((file: string) => {
+      const stat = fs.lstatSync(path.join(dirPath, file));
+      return !stat.isSymbolicLink();
+    })
     .map((file: string) => ({
       path: file,
-      mtime: fs.statSync(path.join(dirPath, file)).mtime,
+      mtime: fs.lstatSync(path.join(dirPath, file)).mtime,
     }))
     .sort(
       (a: { mtime: Date }, b: { mtime: Date }) =>
@@ -68,9 +74,9 @@ export const readFiles: tool<{
   description:
     "Retrieves the contents of specified files from the Obsidian vault. You can provide exact filenames (with or without path), partial filenames, or case-insensitive matches. The tool will search for files that match any of these criteria and return their contents. If a file isn't found, it will indicate that in the response. Each file's content is prefixed with '# File: filename' for clear identification. Use this tool when you need to read specific documents from the vault.",
   schema: {
-    filenames: z.array(z.string()),
+    filenames: z.array(z.string()).max(50),
   },
-  handler: (args, extra: RequestHandlerExtra) => {
+  handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
     const { filenames } = args;
 
     const fileContents = readFilesByName(vaultPath, filenames);
@@ -144,7 +150,7 @@ export const getOpenTodos: tool<{}> = {
   description:
     "Retrieves all open TODO items in the Obsidian vault with their file locations. Useful for getting an overview of pending tasks.",
   schema: {},
-  handler: (args, extra: RequestHandlerExtra) => {
+  handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
     if (!vaultPath) {
       return {
         content: [
@@ -187,7 +193,8 @@ function findOpenTodos(rootPath: string): string[] {
     cwd: rootPath,
     nodir: true,
     dot: false,
-  });
+    follow: false,
+  }).filter((file: string) => !fs.lstatSync(path.join(rootPath, file)).isSymbolicLink());
 
   const todoRegex = /- \[ \] .+/g;
   const todos: string[] = [];
