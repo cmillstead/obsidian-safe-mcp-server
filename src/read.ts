@@ -153,13 +153,21 @@ function readFilesByName(
       return [readAndFormatFile(fileMap.get(lowerTargetName)!)];
     }
 
-    // 3. Try partial filename match
+    // 3. Try partial filename match (capped to prevent read amplification)
+    const MAX_PARTIAL_MATCHES = 5;
     const matchingFiles = allFiles.filter((file) =>
       path.basename(file).toLowerCase().includes(lowerTargetName)
     );
 
     if (matchingFiles.length > 0) {
-      return matchingFiles.map(readAndFormatFile);
+      const capped = matchingFiles.slice(0, MAX_PARTIAL_MATCHES);
+      const results = capped.map(readAndFormatFile);
+      if (matchingFiles.length > MAX_PARTIAL_MATCHES) {
+        results.push(
+          `(${matchingFiles.length - MAX_PARTIAL_MATCHES} more files matched "${targetName}" but were omitted — use a more specific name)`
+        );
+      }
+      return results;
     }
 
     // 4. No matches found

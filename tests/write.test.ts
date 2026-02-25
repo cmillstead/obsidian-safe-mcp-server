@@ -39,15 +39,17 @@ afterEach(() => {
 describe("path traversal prevention", () => {
   it("rejects ../../etc/passwd", () => {
     const result = updateFileContent.handler(
-      { filePath: "../../etc/passwd", content: "pwned" },
+      { filePath: "../../etc/passwd.md", content: "pwned" },
       extra
     );
-    expect(result.content[0].text).toContain("escapes the vault directory");
+    // Caught by dot-path guard (.. starts with .)
+    expect(result.content[0].text).toContain("Error");
+    expect(result.content[0].text).not.toContain("Successfully");
   });
 
   it("rejects absolute path /etc/passwd", () => {
     const result = updateFileContent.handler(
-      { filePath: "/etc/passwd", content: "pwned" },
+      { filePath: "/etc/passwd.md", content: "pwned" },
       extra
     );
     expect(result.content[0].text).toContain("escapes the vault directory");
@@ -55,10 +57,12 @@ describe("path traversal prevention", () => {
 
   it("rejects notes/../../../etc/shadow", () => {
     const result = updateFileContent.handler(
-      { filePath: "notes/../../../etc/shadow", content: "pwned" },
+      { filePath: "notes/../../../etc/shadow.md", content: "pwned" },
       extra
     );
-    expect(result.content[0].text).toContain("escapes the vault directory");
+    // Caught by dot-path guard (.. starts with .)
+    expect(result.content[0].text).toContain("Error");
+    expect(result.content[0].text).not.toContain("Successfully");
   });
 
   it("allows notes/hello.md", () => {
@@ -205,5 +209,178 @@ describe("file creation and update", () => {
     // if somehow called with an empty path, and the handler returns a
     // generic error to avoid leaking system details.
     expect(result.content[0].text).toContain("Failed to write file");
+  });
+});
+
+// -- Dotfile / dotdir write prevention --
+
+describe("dotfile write prevention", () => {
+  it("rejects writing to .obsidian/plugins/evil/main.js", () => {
+    const result = updateFileContent.handler(
+      { filePath: ".obsidian/plugins/evil/main.js", content: "malicious" },
+      extra
+    );
+    expect(result.content[0].text).toContain("dot-prefixed");
+  });
+
+  it("rejects writing to .git/hooks/pre-commit", () => {
+    const result = updateFileContent.handler(
+      { filePath: ".git/hooks/pre-commit", content: "#!/bin/bash\nrm -rf /" },
+      extra
+    );
+    expect(result.content[0].text).toContain("dot-prefixed");
+  });
+
+  it("rejects writing to .hidden.md at root", () => {
+    const result = updateFileContent.handler(
+      { filePath: ".hidden.md", content: "secret" },
+      extra
+    );
+    expect(result.content[0].text).toContain("dot-prefixed");
+  });
+
+  it("rejects writing into a dot-prefixed subdirectory", () => {
+    const result = updateFileContent.handler(
+      { filePath: "notes/.secret/file.md", content: "hidden" },
+      extra
+    );
+    expect(result.content[0].text).toContain("dot-prefixed");
+  });
+});
+
+// -- File extension allowlist --
+
+describe("file extension allowlist", () => {
+  it("rejects .js files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "evil.js", content: "require('child_process')" },
+      extra
+    );
+    expect(result.content[0].text).toContain("not allowed");
+  });
+
+  it("rejects .sh files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "evil.sh", content: "#!/bin/bash" },
+      extra
+    );
+    expect(result.content[0].text).toContain("not allowed");
+  });
+
+  it("rejects .py files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "evil.py", content: "import os" },
+      extra
+    );
+    expect(result.content[0].text).toContain("not allowed");
+  });
+
+  it("rejects .html files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "evil.html", content: "<script>alert(1)</script>" },
+      extra
+    );
+    expect(result.content[0].text).toContain("not allowed");
+  });
+
+  it("rejects files with no extension", () => {
+    const result = updateFileContent.handler(
+      { filePath: "Makefile", content: "all:" },
+      extra
+    );
+    expect(result.content[0].text).toContain("not allowed");
+  });
+
+  it("allows .md files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "note.md", content: "hello" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
+  });
+
+  it("allows .txt files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "note.txt", content: "hello" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
+  });
+
+  it("allows .canvas files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "board.canvas", content: "{}" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
+  });
+
+  it("allows .json files", () => {
+    const result = updateFileContent.handler(
+      { filePath: "data.json", content: "{}" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
+  });
+});
+
+// -- Path length and depth limits --
+
+describe("path length and depth limits", () => {
+  it("rejects paths exceeding 512 characters", () => {
+    const longName = "notes/" + "a".repeat(504) + ".md"; // 514 chars, shallow
+    const result = updateFileContent.handler(
+      { filePath: longName, content: "x" },
+      extra
+    );
+    expect(result.content[0].text).toContain("maximum length");
+  });
+
+  it("rejects paths exceeding 10 levels of depth", () => {
+    const deepPath = "a/b/c/d/e/f/g/h/i/j/k/file.md"; // 12 segments
+    const result = updateFileContent.handler(
+      { filePath: deepPath, content: "x" },
+      extra
+    );
+    expect(result.content[0].text).toContain("maximum depth");
+  });
+
+  it("allows paths at exactly 10 levels of depth", () => {
+    const okPath = "a/b/c/d/e/f/g/h/i/file.md"; // 10 segments
+    const result = updateFileContent.handler(
+      { filePath: okPath, content: "x" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
+  });
+});
+
+// -- Symlinked parent directory prevention --
+
+describe("symlinked parent directory prevention", () => {
+  it("rejects writes through a symlinked parent directory", () => {
+    const outsideDir = createTempVault();
+    // Create a symlinked directory inside the vault pointing outside
+    createSymlink(tmpDir, "linked-dir", outsideDir);
+
+    const result = updateFileContent.handler(
+      { filePath: "linked-dir/payload.md", content: "escaped" },
+      extra
+    );
+    expect(result.content[0].text).toContain("symlinked directory");
+    // Verify nothing was written outside
+    expect(fs.existsSync(path.join(outsideDir, "payload.md"))).toBe(false);
+
+    removeTempVault(outsideDir);
+  });
+
+  it("allows writes through regular subdirectories", () => {
+    fs.mkdirSync(path.join(tmpDir, "real-dir"), { recursive: true });
+
+    const result = updateFileContent.handler(
+      { filePath: "real-dir/note.md", content: "safe" },
+      extra
+    );
+    expect(result.content[0].text).toContain("Successfully");
   });
 });

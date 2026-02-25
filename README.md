@@ -40,12 +40,14 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
 
 ## Security
 
-All file operations are confined to the vault directory:
+All file operations are confined to the vault directory. The threat model assumes the connected AI assistant could be manipulated, so all tool inputs are treated as untrusted:
 
 - **Path traversal protection** — all read and write operations resolve and validate paths to prevent escaping the vault (e.g. `../../etc/passwd` is rejected). Null bytes in paths are rejected to prevent path truncation attacks.
-- **Symlink safety** — symlink files are excluded from all read operations. Writes use `O_NOFOLLOW` to atomically reject symlinks, eliminating TOCTOU race conditions between a check and the write.
+- **Symlink safety** — symlink files are excluded from all read operations. Writes use `O_NOFOLLOW` to atomically reject symlinks, eliminating TOCTOU race conditions. Parent directories are also checked for symlinks to prevent writes through symlinked intermediate directories.
+- **Dotfile/dotdir protection** — writes to dot-prefixed paths are blocked, preventing code injection via `.obsidian/plugins/`, `.git/hooks/`, or other hidden directories.
+- **File extension allowlist** — only safe file types can be written (`.md`, `.txt`, `.csv`, `.json`, `.yaml`, `.yml`, `.canvas`). Executable extensions like `.js`, `.sh`, `.py`, `.html` are rejected.
 - **Vault path validation** — the vault path is validated at startup to ensure it is an existing directory, resolved to an absolute real path. The path is immutable after startup.
-- **Input limits** — file reads are limited to 50 filenames per request, individual file reads are capped at 10MB, and writes are limited to 1MB to prevent resource exhaustion.
+- **Input limits** — file reads are limited to 50 filenames per request, individual file reads are capped at 10MB, writes are limited to 1MB, file paths are capped at 512 characters and 10 levels of depth, and partial filename matches are capped at 5 results per query.
 - **Error sanitization** — error messages returned to the client do not expose filesystem paths or system details. Unexpected errors are logged to stderr and a generic message is returned.
 
 ## Install & Build
@@ -61,7 +63,7 @@ npm run build
 npm test
 ```
 
-The test suite (43 tests) covers path traversal prevention, symlink rejection, input validation limits, vault path validation, and all read/write tool behaviors.
+The test suite (61 tests) covers path traversal prevention, symlink rejection, dotfile write blocking, extension allowlisting, path length/depth limits, symlinked parent directory prevention, input validation limits, vault path validation, and all read/write tool behaviors.
 
 ## Integrating with Claude Desktop and Cursor
 

@@ -6,7 +6,14 @@ import fs from "fs";
 import path from "path";
 import { z } from "zod";
 import { getAllFilenames } from "./read.js";
-import { assertNoNullBytes, assertInsideVault } from "./utils.js";
+import {
+  assertNoNullBytes,
+  assertInsideVault,
+  assertNoDotPaths,
+  assertAllowedExtension,
+  assertPathLimits,
+  assertNoSymlinkedParents,
+} from "./utils.js";
 
 export const updateFileContent: tool<{
   filePath: z.ZodString;
@@ -27,6 +34,9 @@ export const updateFileContent: tool<{
     try {
       const vaultPath = getVaultPath();
       assertNoNullBytes(filePath);
+      assertNoDotPaths(filePath);
+      assertAllowedExtension(filePath);
+      assertPathLimits(filePath);
 
       const resolvedVault = path.resolve(vaultPath);
       const fullPath = path.resolve(resolvedVault, filePath);
@@ -42,6 +52,10 @@ export const updateFileContent: tool<{
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
       }
+
+      // Verify no parent directory is a symlink (prevents vault escape
+      // through symlinked intermediate directories)
+      assertNoSymlinkedParents(fullPath, resolvedVault);
 
       // Use O_NOFOLLOW to atomically reject symlinks at write time,
       // closing the TOCTOU race between a stat check and the write.
@@ -80,10 +94,14 @@ export const updateFileContent: tool<{
         };
       }
 
-      // Surface our own validation errors (null bytes, path escape)
+      // Surface our own validation errors
       if (error instanceof Error && (
         error.message === "File path contains null bytes." ||
-        error.message === "File path escapes the vault directory."
+        error.message === "File path escapes the vault directory." ||
+        error.message === "Cannot write to dot-prefixed files or directories." ||
+        error.message === "Cannot write through a symlinked directory." ||
+        error.message.startsWith("File extension") ||
+        error.message.startsWith("File path exceeds")
       )) {
         return {
           content: [
