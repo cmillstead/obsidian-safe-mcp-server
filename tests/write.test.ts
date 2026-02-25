@@ -12,7 +12,8 @@ import {
 let mockVaultPath = "";
 
 vi.mock("../src/index.js", () => ({
-  get vaultPath() {
+  getVaultPath: () => {
+    if (!mockVaultPath) throw new Error("Vault path is not configured.");
     return mockVaultPath;
   },
   server: {},
@@ -200,6 +201,9 @@ describe("file creation and update", () => {
       { filePath: "file.md", content: "x" },
       extra
     );
-    expect(result.content[0].text).toContain("No vault path provided");
+    // Empty vault path is validated at startup; getVaultPath() throws
+    // if somehow called with an empty path, and the handler returns a
+    // generic error to avoid leaking system details.
+    expect(result.content[0].text).toContain("Failed to write file");
   });
 });

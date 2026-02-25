@@ -1,11 +1,12 @@
 import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { tool } from "./types.js";
-import { vaultPath } from "./index.js";
+import { getVaultPath } from "./index.js";
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
 import { getAllFilenames } from "./read.js";
+import { assertNoNullBytes, assertInsideVault } from "./utils.js";
 
 export const updateFileContent: tool<{
   filePath: z.ZodString;
@@ -21,45 +22,17 @@ export const updateFileContent: tool<{
     content: z.string().max(1_000_000).describe("The markdown content to write to the file"),
   },
   handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
-    if (!vaultPath) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Error: No vault path provided. Please specify a vault path when starting the server.",
-          },
-        ],
-      };
-    }
-
     const { filePath, content } = args;
 
     try {
+      const vaultPath = getVaultPath();
+      assertNoNullBytes(filePath);
+
       const resolvedVault = path.resolve(vaultPath);
       const fullPath = path.resolve(resolvedVault, filePath);
 
-      if (!fullPath.startsWith(resolvedVault + path.sep) && fullPath !== resolvedVault) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: File path escapes the vault directory.",
-            },
-          ],
-        };
-      }
-
-      // Reject writes to symlinks — they could target files outside the vault
-      if (fs.existsSync(fullPath) && fs.lstatSync(fullPath).isSymbolicLink()) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Cannot write to a symbolic link.",
-            },
-          ],
-        };
-      }
+      // Must be strictly inside the vault — not the vault root itself
+      assertInsideVault(fullPath, resolvedVault);
 
       const allFiles = getAllFilenames(vaultPath);
       const fileExists = allFiles.includes(filePath);
@@ -70,7 +43,19 @@ export const updateFileContent: tool<{
         fs.mkdirSync(dirPath, { recursive: true });
       }
 
-      fs.writeFileSync(fullPath, content, "utf8");
+      // Use O_NOFOLLOW to atomically reject symlinks at write time,
+      // closing the TOCTOU race between a stat check and the write.
+      const flags =
+        fs.constants.O_WRONLY |
+        fs.constants.O_CREAT |
+        fs.constants.O_TRUNC |
+        fs.constants.O_NOFOLLOW;
+      const fd = fs.openSync(fullPath, flags, 0o644);
+      try {
+        fs.writeFileSync(fd, content, "utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
 
       return {
         content: [
@@ -83,13 +68,40 @@ export const updateFileContent: tool<{
         ],
       };
     } catch (error) {
+      // Return symlink-specific message for ELOOP (O_NOFOLLOW on a symlink)
+      if (error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ELOOP") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Cannot write to a symbolic link.",
+            },
+          ],
+        };
+      }
+
+      // Surface our own validation errors (null bytes, path escape)
+      if (error instanceof Error && (
+        error.message === "File path contains null bytes." ||
+        error.message === "File path escapes the vault directory."
+      )) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error: ${error.message}`,
+            },
+          ],
+        };
+      }
+
+      // Generic message for all other errors — don't leak system details
+      console.error("Write failed:", error);
       return {
         content: [
           {
             type: "text",
-            text: `Error updating file: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            text: "Error: Failed to write file.",
           },
         ],
       };

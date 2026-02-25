@@ -12,7 +12,8 @@ import {
 let mockVaultPath = "";
 
 vi.mock("../src/index.js", () => ({
-  get vaultPath() {
+  getVaultPath: () => {
+    if (!mockVaultPath) throw new Error("Vault path is not configured.");
     return mockVaultPath;
   },
   server: {},

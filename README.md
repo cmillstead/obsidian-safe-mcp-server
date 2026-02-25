@@ -42,10 +42,11 @@ A lightweight [Model Context Protocol (MCP)](https://modelcontextprotocol.io) se
 
 All file operations are confined to the vault directory:
 
-- **Path traversal protection** — write operations resolve and validate paths to prevent escaping the vault (e.g. `../../etc/passwd` is rejected)
-- **Symlink safety** — symlink files are excluded from all read operations, and writes to symlinks are rejected, preventing vault escape via symlinked files or directories
-- **Vault path validation** — the vault path is validated at startup to ensure it is an existing directory, resolved to an absolute real path
-- **Input limits** — file reads are limited to 50 filenames per request and writes are limited to 1MB to prevent resource exhaustion
+- **Path traversal protection** — all read and write operations resolve and validate paths to prevent escaping the vault (e.g. `../../etc/passwd` is rejected). Null bytes in paths are rejected to prevent path truncation attacks.
+- **Symlink safety** — symlink files are excluded from all read operations. Writes use `O_NOFOLLOW` to atomically reject symlinks, eliminating TOCTOU race conditions between a check and the write.
+- **Vault path validation** — the vault path is validated at startup to ensure it is an existing directory, resolved to an absolute real path. The path is immutable after startup.
+- **Input limits** — file reads are limited to 50 filenames per request, individual file reads are capped at 10MB, and writes are limited to 1MB to prevent resource exhaustion.
+- **Error sanitization** — error messages returned to the client do not expose filesystem paths or system details. Unexpected errors are logged to stderr and a generic message is returned.
 
 ## Install & Build
 

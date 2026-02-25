@@ -9,7 +9,13 @@ export const server = new McpServer({
   version: "1.0.0",
 });
 
-export let vaultPath: string = validateVaultPath(process.argv[2]);
+const _vaultPath: string = validateVaultPath(process.argv[2]);
+export function getVaultPath(): string {
+  if (!_vaultPath) {
+    throw new Error("Vault path is not configured.");
+  }
+  return _vaultPath;
+}
 
 [...readTools, ...writeTools].forEach((tool) => {
   server.tool(tool.name, tool.description, tool.schema, tool.handler);
@@ -18,8 +24,8 @@ export let vaultPath: string = validateVaultPath(process.argv[2]);
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.log(
-    `Obsidian MCP Server running on stdio (using vault path: ${vaultPath})`
+  console.error(
+    `Obsidian MCP Server running on stdio (using vault path: ${_vaultPath})`
   );
 }
 

@@ -1,11 +1,12 @@
 import { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import { ServerRequest, ServerNotification } from "@modelcontextprotocol/sdk/types.js";
 import { tool } from "./types.js";
-import { vaultPath } from "./index.js";
+import { getVaultPath } from "./index.js";
 import fs from "fs";
 import path from "path";
 import { z } from "zod";
 import { glob } from "glob";
+import { assertNoNullBytes, assertInsideVault, getMaxReadSize } from "./utils.js";
 
 const getAllFilenamesTool: tool<{}> = {
   name: "getAllFilenames",
@@ -13,16 +14,7 @@ const getAllFilenamesTool: tool<{}> = {
     "Get a list of all filenames in the Obsidian vault. Useful for retrieving their contents later. ",
   schema: {},
   handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
-    if (!vaultPath) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Error: No vault path provided. Please specify a vault path when starting the server.",
-          },
-        ],
-      };
-    }
+    const vaultPath = getVaultPath();
 
     const filenames = getAllFilenames(vaultPath);
     return {
@@ -79,7 +71,21 @@ export const readFiles: tool<{
   handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
     const { filenames } = args;
 
-    const fileContents = readFilesByName(vaultPath, filenames);
+    // Reject any filenames containing null bytes
+    for (const name of filenames) {
+      if (name.includes("\0")) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: File path contains null bytes.",
+            },
+          ],
+        };
+      }
+    }
+
+    const fileContents = readFilesByName(getVaultPath(), filenames);
 
     if (fileContents.length === 0) {
       return {
@@ -103,6 +109,23 @@ export const readFiles: tool<{
   },
 };
 
+function safeReadFile(rootPath: string, filePath: string): string {
+  const resolvedVault = path.resolve(rootPath);
+  const fullPath = path.resolve(resolvedVault, filePath);
+
+  // Defense-in-depth: verify the resolved path stays inside the vault
+  assertInsideVault(fullPath, resolvedVault);
+
+  // Reject files larger than the read size limit to prevent memory exhaustion
+  const stat = fs.statSync(fullPath);
+  if (stat.size > getMaxReadSize()) {
+    return `# File: ${filePath}\n\nError: File exceeds the ${getMaxReadSize() / (1024 * 1024)}MB read size limit.`;
+  }
+
+  const content = fs.readFileSync(fullPath, "utf8");
+  return `# File: ${filePath}\n\n${content}`;
+}
+
 function readFilesByName(
   rootPath: string,
   targetFilenames: string[]
@@ -115,8 +138,7 @@ function readFilesByName(
   });
 
   const readAndFormatFile = (filePath: string): string => {
-    const content = fs.readFileSync(path.join(rootPath, filePath), "utf8");
-    return `# File: ${filePath}\n\n${content}`;
+    return safeReadFile(rootPath, filePath);
   };
 
   return targetFilenames.flatMap((targetName) => {
@@ -151,18 +173,7 @@ export const getOpenTodos: tool<{}> = {
     "Retrieves all open TODO items in the Obsidian vault with their file locations. Useful for getting an overview of pending tasks.",
   schema: {},
   handler: (args, extra: RequestHandlerExtra<ServerRequest, ServerNotification>) => {
-    if (!vaultPath) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Error: No vault path provided. Please specify a vault path when starting the server.",
-          },
-        ],
-      };
-    }
-
-    const todos = findOpenTodos(vaultPath);
+    const todos = findOpenTodos(getVaultPath());
 
     if (todos.length === 0) {
       return {
@@ -189,6 +200,7 @@ export const getOpenTodos: tool<{}> = {
 };
 
 function findOpenTodos(rootPath: string): string[] {
+  const resolvedVault = path.resolve(rootPath);
   const mdFiles = glob.sync("**/*.md", {
     cwd: rootPath,
     nodir: true,
@@ -200,7 +212,18 @@ function findOpenTodos(rootPath: string): string[] {
   const todos: string[] = [];
 
   mdFiles.forEach((filePath) => {
-    const content = fs.readFileSync(path.join(rootPath, filePath), "utf8");
+    const fullPath = path.resolve(resolvedVault, filePath);
+
+    // Defense-in-depth: verify path stays inside vault
+    assertInsideVault(fullPath, resolvedVault);
+
+    // Skip files that exceed the read size limit
+    const stat = fs.statSync(fullPath);
+    if (stat.size > getMaxReadSize()) {
+      return;
+    }
+
+    const content = fs.readFileSync(fullPath, "utf8");
     const lines = content.split("\n");
 
     lines.forEach((line, index) => {
